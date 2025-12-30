@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<paths>
+    <!-- 允许共享 /sdcard/Download/mock/ 及其所有子目录 -->
+    <external-path
+        name="mock_root"
+        path="Download/mock/" />
+</paths>
