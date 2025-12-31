@@ -1,10 +1,10 @@
 package com.mock.location;
 
-import android.location.Location;
-
 import com.mock.location.model.MockLocationInfo;
 import com.mock.location.util.ConfigFileUtil;
 import com.mock.location.util.JsonUtils;
+
+import java.util.Collections;
 
 import de.robv.android.xposed.IXposedHookLoadPackage;
 import de.robv.android.xposed.XC_MethodHook;
@@ -18,8 +18,8 @@ public class HookMain implements IXposedHookLoadPackage {
     @Override
     public void handleLoadPackage(LoadPackageParam lpparam) throws Throwable {
         // 跳过系统进程和自身
-        if ("android".equals(lpparam.packageName) ||
-                "com.mock.location".equals(lpparam.packageName)) {
+        if ("android".equals(lpparam.packageName)
+                || "com.mock.location".equals(lpparam.packageName)) {
             return;
         }
 
@@ -33,6 +33,8 @@ public class HookMain implements IXposedHookLoadPackage {
     // ==================== Hook Android 原生 Location ====================
     private void hookLocation(LoadPackageParam lpparam) {
         try {
+            final String packageName = lpparam.packageName;
+
             XposedHelpers.findAndHookMethod(
                     "android.location.Location",
                     lpparam.classLoader,
@@ -40,9 +42,15 @@ public class HookMain implements IXposedHookLoadPackage {
                     new XC_MethodHook() {
                         @Override
                         protected void afterHookedMethod(MethodHookParam param) {
-                            MockLocationInfo mockLocationInfo = readMockLocation();
-                            param.setResult(mockLocationInfo.getLat());
-                            XposedBridge.log(TAG +"active"+param.getResult()+ ": android.location.Location📍 getLatitude() -> " + mockLocationInfo.getLat() + " (pkg: " + ")");
+                            try {
+                                MockLocationInfo mockLocationInfo = readMockLocation();
+                                param.setResult(mockLocationInfo.getLat());
+                                XposedBridge.log(TAG + ": Location.getLatitude() -> "
+                                        + mockLocationInfo.getLat()
+                                        + " pkg=" + packageName);
+                            } catch (Throwable t) {
+                                XposedBridge.log(TAG + ": Location.getLatitude hook error: " + t.getMessage());
+                            }
                         }
                     }
             );
@@ -54,31 +62,20 @@ public class HookMain implements IXposedHookLoadPackage {
                     new XC_MethodHook() {
                         @Override
                         protected void afterHookedMethod(MethodHookParam param) {
-                            MockLocationInfo mockLocationInfo = readMockLocation();
-                            param.setResult(mockLocationInfo.getLng());
-                            XposedBridge.log(TAG +"active"+param.getResult()+ ": android.location.Location 📍 getLongitude() -> " + mockLocationInfo.getLng());
+                            try {
+                                MockLocationInfo mockLocationInfo = readMockLocation();
+                                param.setResult(mockLocationInfo.getLng());
+                                XposedBridge.log(TAG + ": Location.getLongitude() -> "
+                                        + mockLocationInfo.getLng()
+                                        + " pkg=" + packageName);
+                            } catch (Throwable t) {
+                                XposedBridge.log(TAG + ": Location.getLongitude hook error: " + t.getMessage());
+                            }
                         }
                     }
             );
-            XposedHelpers.findAndHookMethod(Location.class, "getLatitude", new XC_MethodHook() {
-                @Override
-                protected void afterHookedMethod(MethodHookParam param) {
-                    MockLocationInfo mockLocationInfo = readMockLocation();
-                    param.setResult(mockLocationInfo.getLat());
-                    XposedBridge.log(TAG + "active " + param.getResult() + ":default Location.getLatitude() -> " + mockLocationInfo.getLat());
-                }
-            });
-
-            XposedHelpers.findAndHookMethod(Location.class, "getLongitude", new XC_MethodHook() {
-                @Override
-                protected void afterHookedMethod(MethodHookParam param) {
-                    MockLocationInfo mockLocationInfo = readMockLocation();
-                    XposedBridge.log(TAG + "active " + param.getResult() + ":default Location.getLongitude() -> " + mockLocationInfo.getLng());
-                    param.setResult(mockLocationInfo.getLng());
-                }
-            });
-        } catch (Exception e) {
-            XposedBridge.log(TAG + ": ❌ Failed to hook Location: " + e.getMessage());
+        } catch (Throwable e) {
+            XposedBridge.log(TAG + ": Failed to hook Location: " + e.getMessage());
         }
     }
 
@@ -93,13 +90,18 @@ public class HookMain implements IXposedHookLoadPackage {
                     new XC_MethodHook() {
                         @Override
                         protected void afterHookedMethod(MethodHookParam param) {
-                            XposedBridge.log(TAG +"active: "+JsonUtils.toJson( param.getResult())+ ": ⚠️ getScanResults: ");
-                            param.setResult(null); // 返回空列表
+                            try {
+                                // 返回安全的空列表，避免调用方对结果 for-each 时 NPE
+                                param.setResult(Collections.emptyList());
+                                XposedBridge.log(TAG + ": WifiManager.getScanResults() -> empty list");
+                            } catch (Throwable t) {
+                                XposedBridge.log(TAG + ": getScanResults hook error: " + t.getMessage());
+                            }
                         }
                     }
             );
 
-            // 屏蔽基站定位
+            // 基站定位：仅记录日志，不强行改为 null，避免未判空的 App 崩溃
             XposedHelpers.findAndHookMethod(
                     "android.telephony.TelephonyManager",
                     lpparam.classLoader,
@@ -107,33 +109,41 @@ public class HookMain implements IXposedHookLoadPackage {
                     new XC_MethodHook() {
                         @Override
                         protected void afterHookedMethod(MethodHookParam param) {
-                            XposedBridge.log(TAG +"active: "+JsonUtils.toJson( param.getResult())+ ": ⚠️ getCellLocation: ");
-
-                            param.setResult(null);
+                            try {
+                                Object result = param.getResult();
+                                String type = (result != null)
+                                        ? result.getClass().getSimpleName()
+                                        : "null";
+                                XposedBridge.log(TAG + ": TelephonyManager.getCellLocation() hooked, original=" + type);
+                            } catch (Throwable t) {
+                                XposedBridge.log(TAG + ": getCellLocation hook error: " + t.getMessage());
+                            }
                         }
                     }
             );
-        } catch (Exception e) {
-            XposedBridge.log(TAG + ": ⚠️ Network location hook failed: " + e.getMessage());
+        } catch (Throwable e) {
+            XposedBridge.log(TAG + ": Network location hook failed: " + e.getMessage());
         }
     }
 
     // ==================== 工具方法 ====================
 
     /**
-     * 从当前 App 的私有目录读取 mock_location.txt
-     * 格式：第一行纬度，第二行经度
+     * 从 /data/local/tmp/mock_location.loc 读取 JSON，反序列化为 MockLocationInfo
      */
     private static MockLocationInfo readMockLocation() {
-        // 在 Xposed 的 hook 方法中
-        String jsonStr = ConfigFileUtil.readString(); // 你自己实现的 readString()
+        String jsonStr = ConfigFileUtil.readString();
         if (jsonStr != null) {
             try {
-                return JsonUtils.fromJson(jsonStr, MockLocationInfo.class);
-            } catch (Exception e) {
-                XposedBridge.log("XPOSED: ❌ Parse JSON failed: " + e.getMessage());
+                MockLocationInfo info = JsonUtils.fromJson(jsonStr, MockLocationInfo.class);
+                if (info != null) {
+                    return info;
+                }
+            } catch (Throwable e) {
+                XposedBridge.log(TAG + ": Parse JSON failed: " + e.getMessage());
             }
         }
+        // 兜底：返回默认坐标，保证不为 null
         return MockLocationInfo.DefaultValue();
     }
 }

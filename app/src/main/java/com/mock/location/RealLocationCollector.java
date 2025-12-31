@@ -8,16 +8,15 @@ import android.location.LocationListener;
 import android.location.LocationManager;
 import android.net.wifi.ScanResult;
 import android.net.wifi.WifiManager;
+import android.os.Build;
 import android.os.Bundle;
 import android.os.Looper;
 import android.telephony.CellIdentityGsm;
 import android.telephony.CellIdentityLte;
-import android.telephony.CellIdentityNr;
 import android.telephony.CellIdentityWcdma;
 import android.telephony.CellInfo;
 import android.telephony.CellInfoGsm;
 import android.telephony.CellInfoLte;
-import android.telephony.CellInfoNr;
 import android.telephony.CellInfoWcdma;
 import android.telephony.TelephonyManager;
 import android.util.Log;
@@ -183,8 +182,10 @@ public class RealLocationCollector {
             TelephonyManager tm = (TelephonyManager) context.getSystemService(Context.TELEPHONY_SERVICE);
             if (tm == null) return null;
 
-            if (ActivityCompat.checkSelfPermission(context, Manifest.permission.READ_PHONE_STATE) != PackageManager.PERMISSION_GRANTED) {
-                Log.w(TAG, "缺少 READ_PHONE_STATE 权限，跳过基站信息");
+            boolean hasReadPhoneState = ActivityCompat.checkSelfPermission(context, Manifest.permission.READ_PHONE_STATE) == PackageManager.PERMISSION_GRANTED;
+            boolean hasFineLocation = ActivityCompat.checkSelfPermission(context, Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED;
+            if (!hasReadPhoneState || !hasFineLocation) {
+                Log.w(TAG, "缺少基站相关权限，跳过基站信息");
                 return null;
             }
 
@@ -211,20 +212,71 @@ public class RealLocationCollector {
                 sci.mnc = id.getMnc();
                 sci.lac = id.getLac();
                 sci.cid = id.getCid();
-            } else if (cell instanceof CellInfoLte) {
-                CellIdentityLte id = ((CellInfoLte) cell).getCellIdentity();
-                sci.networkType = "LTE";
-                sci.mcc = id.getMcc();
-                sci.mnc = id.getMnc();
-                sci.lac = id.getTac(); // TAC
-                sci.cid = id.getCi();
-            } else if (cell instanceof CellInfoNr) {
-                CellIdentityNr id = ((CellInfoNr) cell).getCellIdentity();
-                sci.networkType = "NR"; // 5G
-                sci.mcc = id.getMcc();
-                sci.mnc = id.getMnc();
-                sci.lac = id.getTac();
-                sci.cid = (int) (id.getNci() & 0xFFFFFFFFL); // NCI 可能是 long，截断为 int
+            } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                try {
+                    Class<?> cellInfoNrClass = Class.forName("android.telephony.CellInfoNr");
+                    if (!cellInfoNrClass.isInstance(cell)) {
+                        Log.w(TAG, "不支持的 CellInfo 类型: " + cell.getClass().getSimpleName());
+                        return null;
+                    }
+
+                    Object cellIdentity = cellInfoNrClass.getMethod("getCellIdentity").invoke(cell);
+                    if (cellIdentity == null) {
+                        Log.w(TAG, "CellIdentityNr 为 null");
+                        return null;
+                    }
+
+                    Class<?> cellIdentityNrClass = Class.forName("android.telephony.CellIdentityNr");
+
+                    int mcc = -1;
+                    int mnc = -1;
+                    int tac = -1;
+                    long nci = 0L;
+
+                    try {
+                        Object mccObj = cellIdentityNrClass.getMethod("getMcc").invoke(cellIdentity);
+                        if (mccObj instanceof Integer) {
+                            mcc = (Integer) mccObj;
+                        }
+                    } catch (Exception ignored) {
+                    }
+
+                    try {
+                        Object mncObj = cellIdentityNrClass.getMethod("getMnc").invoke(cellIdentity);
+                        if (mncObj instanceof Integer) {
+                            mnc = (Integer) mncObj;
+                        }
+                    } catch (Exception ignored) {
+                    }
+
+                    try {
+                        Object tacObj = cellIdentityNrClass.getMethod("getTac").invoke(cellIdentity);
+                        if (tacObj instanceof Integer) {
+                            tac = (Integer) tacObj;
+                        }
+                    } catch (Exception ignored) {
+                    }
+
+                    try {
+                        Object nciObj = cellIdentityNrClass.getMethod("getNci").invoke(cellIdentity);
+                        if (nciObj instanceof Long) {
+                            nci = (Long) nciObj;
+                        }
+                    } catch (Exception ignored) {
+                    }
+
+                    sci.networkType = "NR";
+                    sci.mcc = mcc;
+                    sci.mnc = mnc;
+                    sci.lac = tac;
+                    sci.cid = (int) (nci & 0xFFFFFFFFL);
+                } catch (ClassNotFoundException e) {
+                    Log.w(TAG, "NR 基站类型在当前系统上不可用");
+                    return null;
+                } catch (Exception e) {
+                    Log.w(TAG, "解析 NR 基站信息失败: " + e.getMessage());
+                    return null;
+                }
             } else {
                 Log.w(TAG, "不支持的 CellInfo 类型: " + cell.getClass().getSimpleName());
                 return null;
