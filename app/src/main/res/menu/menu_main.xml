@@ -6,4 +6,10 @@
         android:icon="@android:drawable/ic_menu_add"
         android:title="添加"
         app:showAsAction="always" />
+
+    <item
+        android:id="@+id/action_manage"
+        android:icon="@android:drawable/ic_menu_manage"
+        android:title="管理"
+        app:showAsAction="always" />
 </menu>

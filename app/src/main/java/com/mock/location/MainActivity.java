@@ -1,10 +1,15 @@
 package com.mock.location;
 
 import android.Manifest;
+import android.content.Context;
+import android.content.Intent;
 import android.content.pm.PackageManager;
+import android.location.Criteria;
+import android.location.LocationManager;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
+import android.provider.Settings;
 import android.util.Log;
 import android.view.Menu;
 import android.view.MenuItem;
@@ -76,8 +81,12 @@ public class MainActivity extends AppCompatActivity {
 
     @Override
     public boolean onOptionsItemSelected(@NonNull MenuItem item) {
-        if (item.getItemId() == R.id.action_add) {
+        int id = item.getItemId();
+        if (id == R.id.action_add) {
             collectAndAddRecord();
+            return true;
+        } else if (id == R.id.action_manage) {
+            startActivity(new Intent(this, RecordListActivity.class));
             return true;
         }
         return super.onOptionsItemSelected(item);
@@ -167,6 +176,7 @@ public class MainActivity extends AppCompatActivity {
                 dismissLoadingDialog();
                 showSaveDialog(record);
             }
+
             @Override
             public void onError(String error) {
                 Log.w(TAG, "【onCollected:onError】" + error);
@@ -178,6 +188,7 @@ public class MainActivity extends AppCompatActivity {
 
         Log.d(TAG, "【END】doCollectLocation 执行完毕（已发起定位请求）");
     }
+
     private void dismissLoadingDialog() {
         if (loadingDialog != null && loadingDialog.isShowing()) {
             loadingDialog.dismiss();
@@ -243,17 +254,48 @@ public class MainActivity extends AppCompatActivity {
     private void startMock() {
         LocationRecord current = RecordManager.getCurrentRecord(this);
         if (current == null) return;
-
+        if (!canUseMockLocation(this)) {
+            return;
+        }
         boolean success = ConfigFileUtil.writeObject(this, current);
         if (success) {
+            MockLocationHelper.startMockingLocation(this, current.getLat(), current.getLng());
             Toast.makeText(this, "✅ Mock 定位已生效！", Toast.LENGTH_SHORT).show();
         } else {
             Toast.makeText(this, "❌ 写入失败（需 Root + Xposed）", Toast.LENGTH_SHORT).show();
         }
     }
+    public boolean canUseMockLocation(Context context) {
+        LocationManager lm = (LocationManager) context.getSystemService(Context.LOCATION_SERVICE);
+        String provider = "test_mock_provider";
+
+        try {
+
+            lm.addTestProvider(
+                    provider,
+                    false, // requiresNetwork
+                    false, // requiresSatellite
+                    false, // requiresCell
+                    false, // hasMonetaryCost
+                    true,  // supportsAltitude
+                    true,  // supportsSpeed
+                    true,  // supportsBearing
+                    Criteria.POWER_LOW,      // ✅ 必须是 POWER_LOW (1), POWER_MEDIUM (2), 或 POWER_HIGH (3)
+                    Criteria.ACCURACY_FINE   // ✅ ACCURACY_COARSE (2) 或 ACCURACY_FINE (1)
+            );
+            lm.removeTestProvider(provider); // 立即清理
+            return true; // 成功 = 有权限
+        } catch (SecurityException e) {
+            return false; // 没有被设为 Mock App
+        } catch (Exception e) {
+            return false;
+        }
+    }
+
 
     private void cancelMock() {
         boolean deleted = ConfigFileUtil.deleteMockFile(this);
+        MockLocationHelper.stopMockingLocation(this);
         if (deleted) {
             Toast.makeText(this, "⏹️ 模拟已停止", Toast.LENGTH_SHORT).show();
         } else {

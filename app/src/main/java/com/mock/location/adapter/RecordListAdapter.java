@@ -9,6 +9,7 @@ import android.view.ViewGroup;
 import android.widget.Button;
 import android.widget.TextView;
 import android.widget.Toast;
+import android.util.Log;
 import androidx.annotation.NonNull;
 import androidx.recyclerview.widget.RecyclerView;
 
@@ -20,6 +21,8 @@ import java.util.List;
 import java.util.Locale;
 
 public class RecordListAdapter extends RecyclerView.Adapter<RecordListAdapter.ViewHolder> {
+
+    private static final String TAG = "RecordListAdapter";
 
     private final Context context;
     private List<LocationRecord> records;
@@ -57,7 +60,7 @@ public class RecordListAdapter extends RecyclerView.Adapter<RecordListAdapter.Vi
         SimpleDateFormat sdf = new SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.getDefault());
         holder.tvTime.setText(sdf.format(record.timestamp));
 
-        // 获取当前选中索引
+        // 获取当前选中索引（用于高亮显示）
         int currentIndex = getCurrentIndex();
 
         // 高亮当前记录
@@ -73,28 +76,67 @@ public class RecordListAdapter extends RecyclerView.Adapter<RecordListAdapter.Vi
             notifyItemChanged(position);      // 刷新新的
         });
 
+        final long recordTimestamp = record.timestamp;
+        final String recordName = record.name;
+
         holder.btnDelete.setOnClickListener(v -> {
             new AlertDialog.Builder(context)
                     .setTitle("确认删除")
-                    .setMessage("确定要删除“" + record.name + "”吗？")
-                    .setPositiveButton("删除", (dialog, which) -> {
-                        records.remove(position);
-                        RecordManager.saveAllRecords(context, records);
-
-                        // 如果删除的是当前记录，重置当前索引
-                        if (position == currentIndex) {
-                            RecordManager.setCurrentRecordIndex(context, -1);
-                        } else if (currentIndex > position) {
-                            // 索引前移
-                            RecordManager.setCurrentRecordIndex(context, currentIndex - 1);
-                        }
-
-                        listener.onDataSetChanged();
-                        Toast.makeText(context, "已删除", Toast.LENGTH_SHORT).show();
-                    })
+                    .setMessage("确定要删除“" + recordName + "”吗？")
+                    .setPositiveButton("删除", (dialog, which) -> deleteRecordByTimestamp(recordTimestamp))
                     .setNegativeButton("取消", null)
                     .show();
         });
+    }
+
+    private int findIndexByTimestamp(long timestamp) {
+        if (records == null || records.isEmpty()) {
+            return -1;
+        }
+        for (int i = 0; i < records.size(); i++) {
+            LocationRecord item = records.get(i);
+            if (item != null && item.timestamp == timestamp) {
+                return i;
+            }
+        }
+        return -1;
+    }
+
+    private void deleteRecordByTimestamp(long timestamp) {
+        if (records == null || records.isEmpty()) {
+            Toast.makeText(context, "删除失败：记录列表为空", Toast.LENGTH_SHORT).show();
+            Log.w(TAG, "deleteRecordByTimestamp: records is null or empty");
+            return;
+        }
+
+        int adapterIndex = findIndexByTimestamp(timestamp);
+        if (adapterIndex < 0 || adapterIndex >= records.size()) {
+            Toast.makeText(context, "删除失败：记录不存在或已被删除", Toast.LENGTH_SHORT).show();
+            Log.w(TAG, "deleteRecordByTimestamp: record not found, timestamp=" + timestamp);
+            return;
+        }
+
+        int currentAdapterIndex = getCurrentIndex();
+
+        records.remove(adapterIndex);
+        List<LocationRecord> updatedList = records;
+        RecordManager.saveAllRecords(context, updatedList);
+
+        // 如果删除的是当前记录，重置当前索引；否则在其之后的索引前移一位
+        if (currentAdapterIndex == adapterIndex) {
+            RecordManager.setCurrentRecordIndex(context, -1);
+        } else if (currentAdapterIndex > adapterIndex) {
+            RecordManager.setCurrentRecordIndex(context, currentAdapterIndex - 1);
+        }
+
+        notifyItemRemoved(adapterIndex);
+        if (listener != null) {
+            listener.onDataSetChanged();
+        }
+        Toast.makeText(context, "已删除", Toast.LENGTH_SHORT).show();
+        Log.d(TAG, "deleteRecordByTimestamp: removed index=" + adapterIndex
+                + ", currentAdapterIndex(before adjust)=" + currentAdapterIndex
+                + ", listSizeNow=" + updatedList.size());
     }
 
     private int getCurrentIndex() {
