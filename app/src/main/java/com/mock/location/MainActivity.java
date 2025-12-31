@@ -87,13 +87,18 @@ public class MainActivity extends AppCompatActivity {
         if (isCollecting) return; // 防止重复触发
         isCollecting = true;
 
-        if (ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_FINE_LOCATION)
-                != PackageManager.PERMISSION_GRANTED) {
-            ActivityCompat.requestPermissions(this,
-                    new String[]{Manifest.permission.ACCESS_FINE_LOCATION},
-                    REQUEST_LOCATION_PERMISSION);
-        } else {
+        boolean hasLocation = ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_FINE_LOCATION)
+                == PackageManager.PERMISSION_GRANTED;
+        boolean hasPhoneState = ContextCompat.checkSelfPermission(this, Manifest.permission.READ_PHONE_STATE)
+                == PackageManager.PERMISSION_GRANTED;
+
+        if (hasLocation && hasPhoneState) {
             doCollectLocation();
+        } else {
+            // 一次性申请定位 + 读取电话状态权限，便于后续采集基站信息
+            ActivityCompat.requestPermissions(this,
+                    new String[]{Manifest.permission.ACCESS_FINE_LOCATION, Manifest.permission.READ_PHONE_STATE},
+                    REQUEST_LOCATION_PERMISSION);
         }
     }
 
@@ -101,11 +106,23 @@ public class MainActivity extends AppCompatActivity {
     public void onRequestPermissionsResult(int requestCode, @NonNull String[] permissions, @NonNull int[] grantResults) {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults);
         if (requestCode == REQUEST_LOCATION_PERMISSION) {
-            isCollecting = false;
-            if (grantResults.length > 0 && grantResults[0] == PackageManager.PERMISSION_GRANTED) {
+            boolean hasLocation = false;
+            boolean hasPhoneState = false;
+
+            for (int i = 0; i < permissions.length; i++) {
+                if (Manifest.permission.ACCESS_FINE_LOCATION.equals(permissions[i])) {
+                    hasLocation = grantResults[i] == PackageManager.PERMISSION_GRANTED;
+                } else if (Manifest.permission.READ_PHONE_STATE.equals(permissions[i])) {
+                    hasPhoneState = grantResults[i] == PackageManager.PERMISSION_GRANTED;
+                }
+            }
+
+            if (hasLocation && hasPhoneState) {
+                // 权限齐备，继续采集
                 doCollectLocation();
             } else {
-                Toast.makeText(this, "需要定位权限才能记录位置", Toast.LENGTH_SHORT).show();
+                isCollecting = false;
+                Toast.makeText(this, "需要定位和电话状态权限才能记录位置", Toast.LENGTH_SHORT).show();
             }
         }
     }
@@ -141,11 +158,21 @@ public class MainActivity extends AppCompatActivity {
         RealLocationCollector.collectCurrentLocation(this, new RealLocationCollector.OnLocationCollectedCallback() {
             @Override
             public void onCollected(LocationRecord record) {
+                int wifiCount = (record.wifiBssids != null) ? record.wifiBssids.size() : 0;
+                boolean hasCellInfo = record.cellInfo != null;
+                Log.d(TAG, "【onCollected】lat=" + record.lat + ", lng=" + record.lng
+                        + ", wifiCount=" + wifiCount
+                        + ", cellInfo=" + (hasCellInfo ? record.cellInfo.toString() : "null"));
+
+                dismissLoadingDialog();
                 showSaveDialog(record);
             }
             @Override
             public void onError(String error) {
+                Log.w(TAG, "【onCollected:onError】" + error);
+                dismissLoadingDialog();
                 Toast.makeText(MainActivity.this, error, Toast.LENGTH_SHORT).show();
+                isCollecting = false;
             }
         });
 
@@ -168,7 +195,20 @@ public class MainActivity extends AppCompatActivity {
 
         AlertDialog.Builder builder = new AlertDialog.Builder(this);
         builder.setTitle("保存新记录");
-        String preview = String.format("位置: %.4f, %.4f", record.lat, record.lng);
+
+        int wifiCount = (record.wifiBssids != null) ? record.wifiBssids.size() : 0;
+        String cellInfoPreview;
+        if (record.cellInfo != null && record.cellInfo.networkType != null) {
+            cellInfoPreview = record.cellInfo.networkType
+                    + "/" + record.cellInfo.mcc
+                    + "/" + record.cellInfo.mnc
+                    + "/" + record.cellInfo.lac
+                    + "/" + record.cellInfo.cid;
+        } else {
+            cellInfoPreview = "无";
+        }
+        String preview = String.format("坐标: %.6f, %.6f\nWiFi BSSID 数量: %d\n基站信息: %s",
+                record.lat, record.lng, wifiCount, cellInfoPreview);
         builder.setMessage(preview);
         builder.setView(input);
 
@@ -181,6 +221,7 @@ public class MainActivity extends AppCompatActivity {
             RecordManager.addRecord(this, record);
             loadRecords();
             Toast.makeText(this, "✅ 已保存：" + name, Toast.LENGTH_SHORT).show();
+            isCollecting = false;
         });
 
         builder.setNegativeButton("取消", (dialog, which) -> {

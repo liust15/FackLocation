@@ -1,10 +1,15 @@
 package com.mock.location;
 
+import android.net.wifi.ScanResult;
+
 import com.mock.location.model.LocationRecord;
+import com.mock.location.model.SerializableCellInfo;
 import com.mock.location.util.ConfigFileUtil;
 import com.mock.location.util.JsonUtils;
 
+import java.util.ArrayList;
 import java.util.Collections;
+import java.util.List;
 
 import de.robv.android.xposed.IXposedHookLoadPackage;
 import de.robv.android.xposed.XC_MethodHook;
@@ -60,7 +65,7 @@ public class HookMain implements IXposedHookLoadPackage {
                         param.setResult(LocationRecord.getLng());
                         XposedBridge.log(TAG + " locationClass: Location.getLongitude() -> "
                                 + LocationRecord.getLng()
-                              );
+                        );
                     }
                 }
         );
@@ -114,51 +119,135 @@ public class HookMain implements IXposedHookLoadPackage {
         }
     }
 
-    // ==================== 屏蔽网络定位（WiFi/基站）====================
+    // ==================== 屏蔽/注入网络定位（WiFi/基站）====================
     private void hookNetworkLocation(LoadPackageParam lpparam) {
         try {
-            // 屏蔽 WiFi 扫描
+            final String packageName = lpparam.packageName;
+            final ClassLoader classLoader = lpparam.classLoader;
+
+            // WiFi 扫描结果注入：使用保存的 BSSID 构造 List<ScanResult>
             XposedHelpers.findAndHookMethod(
                     "android.net.wifi.WifiManager",
-                    lpparam.classLoader,
+                    classLoader,
                     "getScanResults",
                     new XC_MethodHook() {
                         @Override
                         protected void afterHookedMethod(MethodHookParam param) {
                             try {
-                                LocationRecord LocationRecord = readMockLocation();
-                                // 返回安全的空列表，避免调用方对结果 for-each 时 NPE
-                                param.setResult(LocationRecord.getWifiBssids());
-                                XposedBridge.log(TAG + ": WifiManager.getScanResults() -> empty list");
+                                LocationRecord record = readMockLocation();
+                                if (record == null) {
+                                    return;
+                                }
+                                List<String> bssids = record.getWifiBssids();
+                                if (bssids == null || bssids.isEmpty()) {
+                                    // 没有保存的 WiFi 列表，保留原始结果
+                                    return;
+                                }
+
+                                Class<?> scanResultClass = XposedHelpers.findClass(
+                                        "android.net.wifi.ScanResult",
+                                        classLoader
+                                );
+
+                                List<ScanResult> mockedList = new ArrayList<>();
+                                for (String bssid : bssids) {
+                                    if (bssid == null || bssid.isEmpty()) {
+                                        continue;
+                                    }
+                                    Object obj = XposedHelpers.newInstance(scanResultClass);
+                                    ScanResult sr = (ScanResult) obj;
+
+                                    // 通过反射安全设置字段，任一失败则整体回退到原始结果
+                                    XposedHelpers.setObjectField(sr, "BSSID", bssid);
+                                    XposedHelpers.setObjectField(sr, "SSID", "mock");
+                                    try {
+                                        XposedHelpers.setIntField(sr, "level", -50);
+                                    } catch (Throwable ignored) {
+                                        // 某些版本字段名可能变化，忽略
+                                    }
+                                    try {
+                                        XposedHelpers.setIntField(sr, "frequency", 2412);
+                                    } catch (Throwable ignored) {
+                                    }
+
+                                    mockedList.add(sr);
+                                }
+
+                                param.setResult(mockedList);
+                                XposedBridge.log(TAG + ": WifiManager.getScanResults() -> injected "
+                                        + mockedList.size() + " BSSID(s), pkg=" + packageName);
                             } catch (Throwable t) {
-                                XposedBridge.log(TAG + ": getScanResults hook error: " + t.getMessage());
+                                // 任何反射错误都回退到原始结果，避免崩溃
+                                XposedBridge.log(TAG + ": WifiManager.getScanResults inject error: " + t.getMessage());
                             }
                         }
                     }
             );
 
-            // 基站定位：仅记录日志，不强行改为 null，避免未判空的 App 崩溃
+            // 基站定位注入：仅对 GSM/WCDMA 构造 GsmCellLocation
             XposedHelpers.findAndHookMethod(
                     "android.telephony.TelephonyManager",
-                    lpparam.classLoader,
+                    classLoader,
                     "getCellLocation",
                     new XC_MethodHook() {
                         @Override
                         protected void afterHookedMethod(MethodHookParam param) {
                             try {
-                                LocationRecord LocationRecord = readMockLocation();
-                                Object result = param.getResult();
-                                String type = (result != null)
-                                        ? result.getClass().getSimpleName()
-                                        : "null";
-                                param.setResult(LocationRecord.getCellInfo());
-                                XposedBridge.log(TAG + ": TelephonyManager.getCellLocation() hooked, original=" + type);
+                                LocationRecord record = readMockLocation();
+                                if (record == null) {
+                                    return;
+                                }
+                                SerializableCellInfo cellInfo = record.getCellInfo();
+                                if (cellInfo == null) {
+                                    return;
+                                }
+
+                                String nt = cellInfo.networkType != null
+                                        ? cellInfo.networkType.toUpperCase()
+                                        : "";
+                                if (!"GSM".equals(nt) && !"WCDMA".equals(nt)) {
+                                    // LTE/NR 等保持原始结果
+                                    return;
+                                }
+
+                                Class<?> gsmCellLocationClass = XposedHelpers.findClass(
+                                        "android.telephony.gsm.GsmCellLocation",
+                                        classLoader
+                                );
+                                Object gsmCellLocation = XposedHelpers.newInstance(gsmCellLocationClass);
+
+                                boolean applied = false;
+                                try {
+                                    XposedHelpers.callMethod(gsmCellLocation, "setLacAndCid",
+                                            cellInfo.lac, cellInfo.cid);
+                                    applied = true;
+                                } catch (Throwable methodError) {
+                                    try {
+                                        XposedHelpers.setIntField(gsmCellLocation, "mLac", cellInfo.lac);
+                                        XposedHelpers.setIntField(gsmCellLocation, "mCid", cellInfo.cid);
+                                        applied = true;
+                                    } catch (Throwable fieldError) {
+                                        XposedBridge.log(TAG + ": GsmCellLocation setLacAndCid/mLac/mCid failed: "
+                                                + fieldError.getMessage());
+                                    }
+                                }
+
+                                if (!applied) {
+                                    // 无法安全设置 LAC/CID，保留原始结果
+                                    return;
+                                }
+
+                                param.setResult(gsmCellLocation);
+                                XposedBridge.log(TAG + ": TelephonyManager.getCellLocation() -> injected LAC="
+                                        + cellInfo.lac + ", CID=" + cellInfo.cid + ", pkg=" + packageName);
                             } catch (Throwable t) {
-                                XposedBridge.log(TAG + ": getCellLocation hook error: " + t.getMessage());
+                                XposedBridge.log(TAG + ": getCellLocation inject error: " + t.getMessage());
                             }
                         }
                     }
             );
+
+            // 注意：不再 Hook getAllCellInfo，避免脆弱的 CellInfo 模拟
         } catch (Throwable e) {
             XposedBridge.log(TAG + ": Network location hook failed: " + e.getMessage());
         }
