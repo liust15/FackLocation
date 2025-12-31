@@ -5,6 +5,7 @@ import android.content.pm.PackageManager;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
+import android.util.Log;
 import android.view.Menu;
 import android.view.MenuItem;
 import android.widget.Button;
@@ -109,8 +110,12 @@ public class MainActivity extends AppCompatActivity {
         }
     }
 
+    private static final String TAG = Constant.TAG;
+
     private void doCollectLocation() {
-        // 显示 Loading 弹窗（Landing 页面）
+        Log.d(TAG, "【doCollectLocation】开始请求定位");
+
+        // 显示 Loading 弹窗
         if (loadingDialog == null || !loadingDialog.isShowing()) {
             AlertDialog.Builder builder = new AlertDialog.Builder(this);
             builder.setTitle("正在获取当前位置");
@@ -123,37 +128,29 @@ public class MainActivity extends AppCompatActivity {
 
         Handler handler = new Handler(Looper.getMainLooper());
         Runnable timeoutRunnable = () -> {
+            Log.w(TAG, "【TIMEOUT】定位请求超时（15秒）");
             runOnUiThread(() -> {
                 dismissLoadingDialog();
                 Toast.makeText(MainActivity.this, "❌ 获取位置超时，请重试", Toast.LENGTH_LONG).show();
                 isCollecting = false;
             });
         };
-        handler.postDelayed(timeoutRunnable, 15000); // 15秒超时
+        handler.postDelayed(timeoutRunnable, 15000);
 
+        Log.d(TAG, "【CALL】调用 RealLocationCollector.collectCurrentLocation(...)");
         RealLocationCollector.collectCurrentLocation(this, new RealLocationCollector.OnLocationCollectedCallback() {
             @Override
             public void onCollected(LocationRecord record) {
-                handler.removeCallbacks(timeoutRunnable);
-                runOnUiThread(() -> {
-                    dismissLoadingDialog();
-                    showSaveDialog(record);
-                    isCollecting = false;
-                });
+                showSaveDialog(record);
             }
-
             @Override
             public void onError(String error) {
-                handler.removeCallbacks(timeoutRunnable);
-                runOnUiThread(() -> {
-                    dismissLoadingDialog();
-                    Toast.makeText(MainActivity.this, "❌ " + error, Toast.LENGTH_LONG).show();
-                    isCollecting = false;
-                });
+                Toast.makeText(MainActivity.this, error, Toast.LENGTH_SHORT).show();
             }
         });
-    }
 
+        Log.d(TAG, "【END】doCollectLocation 执行完毕（已发起定位请求）");
+    }
     private void dismissLoadingDialog() {
         if (loadingDialog != null && loadingDialog.isShowing()) {
             loadingDialog.dismiss();

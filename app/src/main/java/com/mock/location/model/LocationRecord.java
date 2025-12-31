@@ -1,20 +1,25 @@
-// com.mock.location.model.LocationRecord
+// app/src/main/java/com/mock/location/model/LocationRecord.java
 package com.mock.location.model;
 
+import java.io.Serializable;
+import java.util.ArrayList;
 import java.util.List;
 
-public class LocationRecord {
-    public String name;               // 如 "记录1"
+public class LocationRecord implements Serializable {
+    private static final long serialVersionUID = 1L;
+
+    public String name;
     public double lat;
     public double lng;
-    public long timestamp;           // 记录时间
-    public List<String> wifiBssids;  // 可选：WiFi BSSID 列表（用于高级伪装）
-    public CellInfo cellInfo;        // 可选：基站信息
+    public long timestamp;
+    public List<String> wifiBssids = new ArrayList<>();
+    public SerializableCellInfo cellInfo;
 
-    public static class CellInfo {
-        public int cid;   // Cell ID
-        public int lac;   // Location Area Code
-        public int mcc;   // Mobile Country Code
-        public int mnc;   // Mobile Network Code
+    public LocationRecord() {}
+
+    public LocationRecord(double lat, double lng) {
+        this.lat = lat;
+        this.lng = lng;
+        this.timestamp = System.currentTimeMillis();
     }
 }
