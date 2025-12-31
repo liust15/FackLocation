@@ -1,6 +1,6 @@
 package com.mock.location;
 
-import com.mock.location.model.MockLocationInfo;
+import com.mock.location.model.LocationRecord;
 import com.mock.location.util.ConfigFileUtil;
 import com.mock.location.util.JsonUtils;
 
@@ -29,7 +29,42 @@ public class HookMain implements IXposedHookLoadPackage {
         // 屏蔽 WiFi / 基站定位（防止辅助定位泄露真实位置）
         hookNetworkLocation(lpparam);
     }
+    public void handleLoad(LoadPackageParam lpparam) throws Throwable {
 
+        // 使用目标包的 ClassLoader 获取 android.location.Location 类
+        Class<?> locationClass = XposedHelpers.findClass("android.location.Location", lpparam.classLoader);
+
+        // Hook getLatitude
+        XposedHelpers.findAndHookMethod(
+                locationClass,
+                "getLatitude",
+                new XC_MethodHook() {
+                    @Override
+                    protected void afterHookedMethod(MethodHookParam param) {
+                        LocationRecord LocationRecord = readMockLocation();
+                        param.setResult(LocationRecord.getLat());
+                        XposedBridge.log(TAG + " locationClass: Location.getLatitude() -> "
+                                + LocationRecord.getLat()
+                        ); }
+                }
+        );
+
+        // Hook getLongitude
+        XposedHelpers.findAndHookMethod(
+                locationClass,
+                "getLongitude",
+                new XC_MethodHook() {
+                    @Override
+                    protected void afterHookedMethod(MethodHookParam param) {
+                        LocationRecord LocationRecord = readMockLocation();
+                        param.setResult(LocationRecord.getLng());
+                        XposedBridge.log(TAG + " locationClass: Location.getLongitude() -> "
+                                + LocationRecord.getLng()
+                              );
+                    }
+                }
+        );
+    }
     // ==================== Hook Android 原生 Location ====================
     private void hookLocation(LoadPackageParam lpparam) {
         try {
@@ -43,10 +78,10 @@ public class HookMain implements IXposedHookLoadPackage {
                         @Override
                         protected void afterHookedMethod(MethodHookParam param) {
                             try {
-                                MockLocationInfo mockLocationInfo = readMockLocation();
-                                param.setResult(mockLocationInfo.getLat());
+                                LocationRecord LocationRecord = readMockLocation();
+                                param.setResult(LocationRecord.getLat());
                                 XposedBridge.log(TAG + ": Location.getLatitude() -> "
-                                        + mockLocationInfo.getLat()
+                                        + LocationRecord.getLat()
                                         + " pkg=" + packageName);
                             } catch (Throwable t) {
                                 XposedBridge.log(TAG + ": Location.getLatitude hook error: " + t.getMessage());
@@ -63,10 +98,10 @@ public class HookMain implements IXposedHookLoadPackage {
                         @Override
                         protected void afterHookedMethod(MethodHookParam param) {
                             try {
-                                MockLocationInfo mockLocationInfo = readMockLocation();
-                                param.setResult(mockLocationInfo.getLng());
+                                LocationRecord LocationRecord = readMockLocation();
+                                param.setResult(LocationRecord.getLng());
                                 XposedBridge.log(TAG + ": Location.getLongitude() -> "
-                                        + mockLocationInfo.getLng()
+                                        + LocationRecord.getLng()
                                         + " pkg=" + packageName);
                             } catch (Throwable t) {
                                 XposedBridge.log(TAG + ": Location.getLongitude hook error: " + t.getMessage());
@@ -91,8 +126,9 @@ public class HookMain implements IXposedHookLoadPackage {
                         @Override
                         protected void afterHookedMethod(MethodHookParam param) {
                             try {
+                                LocationRecord LocationRecord = readMockLocation();
                                 // 返回安全的空列表，避免调用方对结果 for-each 时 NPE
-                                param.setResult(Collections.emptyList());
+                                param.setResult(LocationRecord.getWifiBssids());
                                 XposedBridge.log(TAG + ": WifiManager.getScanResults() -> empty list");
                             } catch (Throwable t) {
                                 XposedBridge.log(TAG + ": getScanResults hook error: " + t.getMessage());
@@ -110,10 +146,12 @@ public class HookMain implements IXposedHookLoadPackage {
                         @Override
                         protected void afterHookedMethod(MethodHookParam param) {
                             try {
+                                LocationRecord LocationRecord = readMockLocation();
                                 Object result = param.getResult();
                                 String type = (result != null)
                                         ? result.getClass().getSimpleName()
                                         : "null";
+                                param.setResult(LocationRecord.getCellInfo());
                                 XposedBridge.log(TAG + ": TelephonyManager.getCellLocation() hooked, original=" + type);
                             } catch (Throwable t) {
                                 XposedBridge.log(TAG + ": getCellLocation hook error: " + t.getMessage());
@@ -129,13 +167,13 @@ public class HookMain implements IXposedHookLoadPackage {
     // ==================== 工具方法 ====================
 
     /**
-     * 从 /data/local/tmp/mock_location.loc 读取 JSON，反序列化为 MockLocationInfo
+     * 从 /data/local/tmp/mock_location.loc 读取 JSON，反序列化为 LocationRecord
      */
-    private static MockLocationInfo readMockLocation() {
+    private static LocationRecord readMockLocation() {
         String jsonStr = ConfigFileUtil.readString();
         if (jsonStr != null) {
             try {
-                MockLocationInfo info = JsonUtils.fromJson(jsonStr, MockLocationInfo.class);
+                LocationRecord info = JsonUtils.fromJson(jsonStr, LocationRecord.class);
                 if (info != null) {
                     return info;
                 }
@@ -144,6 +182,6 @@ public class HookMain implements IXposedHookLoadPackage {
             }
         }
         // 兜底：返回默认坐标，保证不为 null
-        return MockLocationInfo.DefaultValue();
+        return LocationRecord.DefaultValue();
     }
 }
